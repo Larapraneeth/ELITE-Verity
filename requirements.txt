@@ -8,3 +8,5 @@ groq
 python-dotenv
 python-multipart
 pydantic
+SQLAlchemy
+psycopg[binary]
