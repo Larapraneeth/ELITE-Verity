@@ -11,6 +11,7 @@ from app.models import Document
 from app.repositories import DocumentRepository
 from app.services.rag_service import answer_question
 from app.services.redis_service import redis_service
+from app.services.document_processing import document_processing_service
 from app.config import (
     CACHE_TTL_SECONDS,
     CHAT_RATE_LIMIT,
@@ -46,6 +47,11 @@ class DocumentResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+
+class DocumentStatusResponse(BaseModel):
+    id: int
+    status: str
 
 
 @app.get("/health")
@@ -106,4 +112,37 @@ def get_document(
     document = DocumentRepository(session).get(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found.")
+    return document
+
+
+@app.get("/api/documents/{document_id}/status", response_model=DocumentStatusResponse)
+def get_document_status(
+    document_id: int,
+    session: Session = Depends(get_db),
+) -> DocumentStatusResponse:
+    document = DocumentRepository(session).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return DocumentStatusResponse(id=document.id, status=document.status)
+
+
+@app.post("/api/documents/{document_id}/process", response_model=DocumentResponse, status_code=202)
+def queue_document_processing(
+    document_id: int,
+    session: Session = Depends(get_db),
+) -> Document:
+    repository = DocumentRepository(session)
+    document = repository.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if (
+        document.status == "processing"
+        or document_processing_service.is_active(document_id)
+    ):
+        raise HTTPException(status_code=409, detail="Document is already being processed.")
+
+    document = repository.update_status(document_id, "pending")
+    if not document_processing_service.enqueue(document_id):
+        repository.update_status(document_id, "failed")
+        raise HTTPException(status_code=503, detail="Unable to queue document processing.")
     return document

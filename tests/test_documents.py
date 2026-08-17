@@ -76,7 +76,7 @@ def test_document_endpoints(client: TestClient, session: Session):
 
     detail_response = client.get(f"/api/documents/{document.id}")
     assert detail_response.status_code == 200
-    assert detail_response.json()["status"] == "uploaded"
+    assert detail_response.json()["status"] == "pending"
 
     missing_response = client.get("/api/documents/9999")
     assert missing_response.status_code == 404

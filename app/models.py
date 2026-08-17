@@ -12,7 +12,7 @@ class Document(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     filename: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     file_type: Mapped[str] = mapped_column(String(50))
-    status: Mapped[str] = mapped_column(String(50), default="uploaded")
+    status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
