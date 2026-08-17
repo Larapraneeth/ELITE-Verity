@@ -1,26 +1,20 @@
-from app.services.pdf_parser import extract_pdf_content
+from pathlib import Path
+
+from app.services.pdf_parser import extract_pdf_links
 
 
-pdf_path = "data/uploads/sample.pdf"
+PDF_FIXTURE = Path(__file__).resolve().parents[1] / "data" / "uploads" / "sample.pdf"
 
-pages = extract_pdf_content(pdf_path)
 
-total_links = 0
+def test_extract_pdf_links_returns_unique_link_metadata():
+    links = extract_pdf_links(PDF_FIXTURE)
 
-print("=" * 70)
-print("PDF HYPERLINK EXTRACTION")
-print("=" * 70)
-
-for page in pages:
-    links = page["links"]
-
-    if links:
-        print(f"\nPage {page['page']}:")
-
-        for link in links:
-            print(f"  {link}")
-            total_links += 1
-
-print("\n" + "=" * 70)
-print(f"Total hyperlinks found: {total_links}")
-print("=" * 70)
+    assert isinstance(links, list)
+    assert len({(link["page"], link["url"]) for link in links}) == len(links)
+    assert all(
+        set(link) == {"page", "url", "type"}
+        and isinstance(link["page"], int)
+        and link["url"]
+        and link["type"] in {"clickable", "text"}
+        for link in links
+    )

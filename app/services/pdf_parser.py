@@ -6,6 +6,10 @@ def extract_pdf_content(pdf_path):
     try:
         doc = pymupdf.open(pdf_path)
 
+        links_by_page = {}
+        for link in extract_pdf_links(pdf_path):
+            links_by_page.setdefault(link["page"], []).append(link)
+
         pages = []
 
         for page_number, page in enumerate(doc, start=1):
@@ -13,7 +17,8 @@ def extract_pdf_content(pdf_path):
 
             pages.append({
                 "page": page_number,
-                "text": text
+                "text": text,
+                "links": links_by_page.get(page_number, [])
             })
 
         doc.close()
