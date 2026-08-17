@@ -5,11 +5,14 @@ from app.services.embedding_service import generate_embeddings
 from app.services.vector_store import VectorStore
 from app.services.llm_service import generate_answer
 from app.services.pdf_parser import extract_pdf_links
+from app.services.reranker import Reranker
 
 
 NOT_AVAILABLE_MESSAGE = (
     "The answer is not available in the uploaded documents."
 )
+
+reranker = Reranker()
 
 
 def get_document_links(filename):
@@ -134,16 +137,14 @@ def get_llm_limit(question):
 
 
 def get_candidate_limit(question):
-    if is_summary_question(question):
-        return 10
+    return 12
 
-    if is_list_question(question):
-        return 10
 
-    if is_comparison_question(question):
-        return 8
-
-    return 6
+def rerank_candidates(question, candidates):
+    try:
+        return reranker.rerank(question, candidates)
+    except Exception:
+        return candidates
 
 
 def keyword_score(question, document):
@@ -683,6 +684,11 @@ def retrieve_relevant_chunks(
 
     candidates.sort(
         key=lambda x: -x["score"]
+    )
+
+    candidates = rerank_candidates(
+        question,
+        candidates,
     )
 
     selected = []
