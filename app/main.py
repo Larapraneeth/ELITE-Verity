@@ -2,14 +2,20 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import Depends, FastAPI, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Document
 from app.repositories import DocumentRepository
 from app.services.rag_service import answer_question
+from app.services.redis_service import redis_service
+from app.config import (
+    CACHE_TTL_SECONDS,
+    CHAT_RATE_LIMIT,
+    CHAT_RATE_LIMIT_WINDOW_SECONDS,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -48,10 +54,37 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+    client_host = (
+        http_request.client.host
+        if http_request.client is not None
+        else "unknown"
+    )
+
+    if not redis_service.allow_request(
+        client_host,
+        CHAT_RATE_LIMIT,
+        CHAT_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=429, detail="Too many chat requests.")
+
+    cache_key = redis_service.cache_key(request.document, request.question)
+    cached_result = redis_service.get_json(cache_key)
+    if cached_result is not None:
+        try:
+            return ChatResponse.model_validate(cached_result)
+        except ValidationError:
+            logger.warning("Ignoring invalid cached chat response")
+
     try:
         result = answer_question(request.question, request.document)
-        return ChatResponse.model_validate(result)
+        response = ChatResponse.model_validate(result)
+        redis_service.set_json(
+            cache_key,
+            response.model_dump(mode="json"),
+            CACHE_TTL_SECONDS,
+        )
+        return response
     except Exception:
         logger.exception("Chat request failed")
         raise HTTPException(
