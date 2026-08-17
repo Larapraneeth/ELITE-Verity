@@ -1,9 +1,14 @@
 import logging
+from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
+from app.database import get_db
+from app.models import Document
+from app.repositories import DocumentRepository
 from app.services.rag_service import answer_question
 
 
@@ -26,6 +31,17 @@ class ChatResponse(BaseModel):
     distance: float | None = None
 
 
+class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    file_type: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -42,3 +58,19 @@ def chat(request: ChatRequest) -> ChatResponse:
             status_code=500,
             detail="Unable to process chat request."
         )
+
+
+@app.get("/api/documents", response_model=list[DocumentResponse])
+def list_documents(session: Session = Depends(get_db)) -> list[Document]:
+    return DocumentRepository(session).list()
+
+
+@app.get("/api/documents/{document_id}", response_model=DocumentResponse)
+def get_document(
+    document_id: int,
+    session: Session = Depends(get_db),
+) -> Document:
+    document = DocumentRepository(session).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return document
