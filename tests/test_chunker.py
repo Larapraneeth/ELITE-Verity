@@ -1,7 +1,7 @@
 from app.services.chunker import chunk_text
 
 
-text = """
+TEXT = """
 Artificial intelligence is a field of computer science.
 Machine learning is a subset of artificial intelligence.
 Deep learning uses neural networks to learn patterns from data.
@@ -11,11 +11,9 @@ with language model generation.
 """ * 20
 
 
-chunks = chunk_text(text)
+def test_chunk_text_returns_overlapping_chunks():
+    chunks = chunk_text(TEXT)
 
-print("Number of chunks:", len(chunks))
-
-for i, chunk in enumerate(chunks, start=1):
-    print(f"\n--- Chunk {i} ---")
-    print(chunk)
-    print("Length:", len(chunk))
+    assert len(chunks) > 1
+    assert all(chunk for chunk in chunks)
+    assert all(len(chunk) <= 1000 for chunk in chunks)
