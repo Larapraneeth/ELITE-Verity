@@ -7,8 +7,10 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from app.config import REDIS_URL
+from app.logging_config import configure_logging
 
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +28,7 @@ class RedisService:
         try:
             return bool(self.client.ping())
         except RedisError:
+            logger.warning("Redis health check failed", extra={"event": "redis.health_failed"})
             return False
 
     @staticmethod
@@ -41,6 +44,7 @@ class RedisService:
             value = self.client.get(key)
             return json.loads(value) if value else None
         except (RedisError, json.JSONDecodeError, TypeError):
+            logger.warning("Redis cache read failed", extra={"event": "redis.cache_read_failed"})
             return None
 
     def set_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None:
@@ -50,7 +54,7 @@ class RedisService:
         try:
             self.client.setex(key, ttl_seconds, json.dumps(value))
         except (RedisError, TypeError):
-            logger.warning("Redis cache write failed")
+            logger.warning("Redis cache write failed", extra={"event": "redis.cache_write_failed"})
 
     def allow_request(self, identifier: str, limit: int, window_seconds: int) -> bool:
         if self.client is None:
@@ -63,6 +67,7 @@ class RedisService:
                 self.client.expire(key, window_seconds)
             return count <= limit
         except RedisError:
+            logger.warning("Redis rate-limit operation failed", extra={"event": "redis.rate_limit_failed"})
             return True
 
 

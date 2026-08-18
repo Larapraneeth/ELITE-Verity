@@ -6,12 +6,14 @@ from threading import Lock
 
 from app.database import SessionLocal
 from app.config import WORKER_POLL_INTERVAL_SECONDS
+from app.logging_config import configure_logging
 from app.repositories import DocumentRepository
 from app.services.document_processor import process_document
 from app.services.embedding_service import generate_embeddings
 from app.services.vector_store import VectorStore
 
 
+configure_logging()
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = Path("data/uploads")
 
@@ -34,11 +36,12 @@ class DocumentProcessingService:
 
         try:
             self.executor.submit(self.process, document_id)
+            logger.info("Document processing queued", extra={"event": "document.queued", "document_id": document_id})
             return True
         except Exception:
             with self.lock:
                 self.active_jobs.discard(document_id)
-            logger.exception("Could not queue document processing")
+            logger.exception("Could not queue document processing", extra={"event": "document.queue_failed", "document_id": document_id})
             return False
 
     def is_active(self, document_id: int) -> bool:
@@ -54,6 +57,7 @@ class DocumentProcessingService:
             if document is None:
                 return
 
+            logger.info("Document processing started", extra={"event": "document.processing_started", "document_id": document_id})
             file_path = UPLOAD_DIR / Path(document.filename).name
             chunks = process_document(file_path)
             if not chunks:
@@ -62,12 +66,13 @@ class DocumentProcessingService:
             embeddings = generate_embeddings([chunk["text"] for chunk in chunks])
             VectorStore().add_chunks(chunks, embeddings)
             repository.update_status(document_id, "ready")
+            logger.info("Document processing completed", extra={"event": "document.ready", "document_id": document_id})
         except Exception:
-            logger.exception("Document processing failed for document %s", document_id)
+            logger.exception("Document processing failed", extra={"event": "document.failed", "document_id": document_id})
             try:
                 repository.update_status(document_id, "failed")
             except Exception:
-                logger.exception("Could not mark document %s as failed", document_id)
+                logger.exception("Could not mark document as failed", extra={"event": "document.status_update_failed", "document_id": document_id})
         finally:
             session.close()
             with self.lock:
@@ -92,7 +97,7 @@ def run_worker() -> None:
         try:
             document_processing_service.enqueue_pending()
         except Exception:
-            logger.exception("Could not poll pending document jobs")
+            logger.exception("Could not poll pending document jobs", extra={"event": "document.poll_failed"})
         time.sleep(WORKER_POLL_INTERVAL_SECONDS)
 
 

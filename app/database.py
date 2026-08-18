@@ -1,9 +1,16 @@
 from collections.abc import Generator
+import logging
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import DATABASE_URL
+from app.logging_config import configure_logging
+
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -22,6 +29,9 @@ def get_db() -> Generator[Session, None, None]:
     session = SessionLocal()
     try:
         yield session
+    except SQLAlchemyError:
+        logger.exception("Database operation failed", extra={"event": "database.operation_failed"})
+        raise
     finally:
         session.close()
 

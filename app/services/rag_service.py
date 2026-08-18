@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import re
 
 from app.services.embedding_service import generate_embeddings
@@ -6,11 +7,15 @@ from app.services.vector_store import VectorStore
 from app.services.llm_service import generate_answer
 from app.services.pdf_parser import extract_pdf_links
 from app.services.reranker import Reranker
+from app.logging_config import configure_logging
 
 
 NOT_AVAILABLE_MESSAGE = (
     "The answer is not available in the uploaded documents."
 )
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 reranker = Reranker()
 
@@ -921,6 +926,8 @@ def answer_question(
         ).strip()
 
     except Exception as error:
+
+        logger.warning("RAG generation failed", extra={"event": "rag.generation_failed"})
 
         error_text = str(
             error

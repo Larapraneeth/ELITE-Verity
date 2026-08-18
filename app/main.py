@@ -1,8 +1,11 @@
 import logging
+import time
+import uuid
 from datetime import datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
@@ -18,11 +21,46 @@ from app.config import (
     CHAT_RATE_LIMIT_WINDOW_SECONDS,
     DOCUMENT_PROCESSING_ENABLED,
 )
+from app.logging_config import configure_logging, reset_request_id, set_request_id
 
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ELITE Verity API")
+
+
+@app.middleware("http")
+async def add_request_context(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", "").strip() or str(uuid.uuid4())
+    token = set_request_id(request_id)
+    started = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Unhandled API error",
+            extra={"event": "api.unhandled_error", "method": request.method, "path": request.url.path},
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error."},
+        )
+
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "API request completed",
+        extra={
+            "event": "api.request_completed",
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        },
+    )
+    reset_request_id(token)
+    return response
 
 
 class ChatRequest(BaseModel):
@@ -93,7 +131,7 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         )
         return response
     except Exception:
-        logger.exception("Chat request failed")
+        logger.exception("Chat request failed", extra={"event": "rag.request_failed"})
         raise HTTPException(
             status_code=500,
             detail="Unable to process chat request."
