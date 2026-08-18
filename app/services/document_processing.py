@@ -1,4 +1,6 @@
 import logging
+import signal
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -46,9 +48,14 @@ class DocumentProcessingService:
         )
         self.active_jobs: set[int] = set()
         self.lock = Lock()
+        self._worker_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._shutdown = False
 
     def enqueue(self, document_id: int) -> bool:
         with self.lock:
+            if self._shutdown:
+                return False
             if document_id in self.active_jobs:
                 return False
             self.active_jobs.add(document_id)
@@ -138,14 +145,87 @@ class DocumentProcessingService:
         for document_id in document_ids:
             self.enqueue(document_id)
 
+    def _ensure_executor(self) -> None:
+        """Recreate the executor after the service has been shut down."""
+        if self._shutdown:
+            self.executor = ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="document-processing",
+            )
+            self._shutdown = False
 
-def run_worker() -> None:
-    while True:
-        try:
-            document_processing_service.enqueue_pending()
-        except Exception:
-            logger.exception("Could not poll pending document jobs", extra={"event": "document.poll_failed"})
-        time.sleep(WORKER_POLL_INTERVAL_SECONDS)
+    def start_worker(self) -> None:
+        """Start the background polling worker thread.
+
+        Idempotent: if a worker is already running this is a no-op, so
+        initialising the application lifecycle more than once cannot create
+        duplicate workers."""
+        with self.lock:
+            self._ensure_executor()
+            if self._worker_thread is not None and self._worker_thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._worker_thread = threading.Thread(
+                target=self._poll_loop,
+                args=(self._stop_event,),
+                name="document-processing-worker",
+                daemon=True,
+            )
+            self._worker_thread.start()
+
+    def stop_worker(self) -> None:
+        """Signal the polling worker thread to stop and wait for it to exit."""
+        self._stop_event.set()
+        with self.lock:
+            thread = self._worker_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=WORKER_POLL_INTERVAL_SECONDS + 1)
+        with self.lock:
+            if self._worker_thread is thread:
+                self._worker_thread = None
+
+    def shutdown(self) -> None:
+        """Stop the worker thread and shut down the executor cleanly.
+
+        Queued jobs are cancelled; already-running jobs are allowed to finish.
+        Idempotent, so it is safe to run when the worker is already stopped or
+        when the application lifecycle is shut down more than once."""
+        self.stop_worker()
+        with self.lock:
+            self._shutdown = True
+            self.active_jobs.clear()
+        self.executor.shutdown(wait=True, cancel_futures=True)
+
+    def _poll_loop(self, stop_event: threading.Event) -> None:
+        """Poll for pending documents until ``stop_event`` is set."""
+        while not stop_event.is_set():
+            stop_event.wait(WORKER_POLL_INTERVAL_SECONDS)
+            if stop_event.is_set():
+                break
+            try:
+                self.enqueue_pending()
+            except Exception:
+                logger.exception(
+                    "Could not poll pending document jobs",
+                    extra={"event": "document.poll_failed"},
+                )
+
+
+def run_worker(stop_event: threading.Event | None = None) -> None:
+    """Run the document processing worker until told to stop.
+
+    The Docker worker container calls this function (see docker-compose.yml).
+    In the main thread, SIGTERM/SIGINT trigger a clean shutdown of the
+    document processing service."""
+    if stop_event is None:
+        stop_event = threading.Event()
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, lambda _signum, _frame: stop_event.set())
+            signal.signal(signal.SIGINT, lambda _signum, _frame: stop_event.set())
+    try:
+        document_processing_service._poll_loop(stop_event)
+    finally:
+        document_processing_service.shutdown()
 
 
 document_processing_service = DocumentProcessingService()

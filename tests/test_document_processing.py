@@ -1,3 +1,5 @@
+import threading
+import time
 from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, call, patch
@@ -280,4 +282,88 @@ def test_recover_stale_processing_resets_stuck_documents(session: Session):
     assert repository.recover_stale_processing(stale_seconds=300) == 1
     session.refresh(document)
     assert document.status == "pending"
+
+
+def test_start_worker_is_idempotent():
+    service = DocumentProcessingService(session_factory=Mock(), executor=Mock())
+    service.start_worker()
+    worker_thread = service._worker_thread
+    assert worker_thread is not None and worker_thread.is_alive()
+
+    # Starting the worker again must not create a duplicate worker thread.
+    service.start_worker()
+    assert service._worker_thread is worker_thread
+
+    service.stop_worker()
+    assert not worker_thread.is_alive()
+    assert service._worker_thread is None
+
+
+def test_shutdown_stops_worker_and_shuts_down_executor():
+    executor = Mock()
+    service = DocumentProcessingService(session_factory=Mock(), executor=executor)
+    service.start_worker()
+    worker_thread = service._worker_thread
+
+    service.shutdown()
+
+    assert not worker_thread.is_alive()
+    assert service._worker_thread is None
+    executor.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
+    # A shut-down service rejects new jobs.
+    assert service.enqueue(12) is False
+    assert service.active_jobs == set()
+
+
+def test_worker_restarts_cleanly_after_shutdown():
+    executor = Mock()
+    service = DocumentProcessingService(session_factory=Mock(), executor=executor)
+    service.start_worker()
+    service.shutdown()
+    assert executor.shutdown.call_count == 1
+
+    # A later lifecycle startup recreates the executor and worker thread.
+    service.start_worker()
+    assert service.executor is not executor
+    assert service._worker_thread is not None and service._worker_thread.is_alive()
+    assert service.enqueue(12) is True
+    service.shutdown()
+    assert service._worker_thread is None
+
+
+def test_poll_loop_runs_until_stop_event(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.document_processing.WORKER_POLL_INTERVAL_SECONDS", 0.01
+    )
+    service = DocumentProcessingService(session_factory=Mock(), executor=Mock())
+    service.enqueue_pending = Mock()
+    stop_event = threading.Event()
+
+    worker = threading.Thread(target=service._poll_loop, args=(stop_event,), daemon=True)
+    worker.start()
+    try:
+        deadline = time.time() + 2
+        while service.enqueue_pending.call_count < 1 and time.time() < deadline:
+            time.sleep(0.01)
+        assert service.enqueue_pending.call_count >= 1
+    finally:
+        stop_event.set()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+
+
+def test_enqueue_pending_closes_session():
+    session = Mock()
+    repository = Mock()
+    repository.list_pending.return_value = []
+    service = DocumentProcessingService(session_factory=lambda: session, executor=Mock())
+
+    with patch(
+        "app.services.document_processing.DocumentRepository",
+        return_value=repository,
+    ):
+        service.enqueue_pending()
+
+    session.close.assert_called_once()
 

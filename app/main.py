@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -29,7 +30,25 @@ from app.logging_config import configure_logging, reset_request_id, set_request_
 configure_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ELITE Verity API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if DOCUMENT_PROCESSING_ENABLED:
+        document_processing_service.start_worker()
+        logger.info(
+            "Document processing worker started",
+            extra={"event": "app.worker_started"},
+        )
+    try:
+        yield
+    finally:
+        document_processing_service.shutdown()
+        logger.info(
+            "Document processing service shut down",
+            extra={"event": "app.worker_stopped"},
+        )
+
+
+app = FastAPI(title="ELITE Verity API", lifespan=lifespan)
 
 
 @app.middleware("http")
