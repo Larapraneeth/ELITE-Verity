@@ -1,6 +1,11 @@
+import logging
+
 import chromadb
 
 from app.config import CHROMA_HOST, CHROMA_PERSIST_DIRECTORY, CHROMA_PORT
+
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStore:
@@ -24,6 +29,17 @@ class VectorStore:
                 name="pdf_documents"
             )
         )
+
+    def health_check(self) -> bool:
+        try:
+            self.client.heartbeat()
+            return True
+        except Exception:
+            logger.warning(
+                "Chroma health check failed",
+                extra={"event": "chroma.health_failed"},
+            )
+            return False
 
     def add_chunks(
         self,

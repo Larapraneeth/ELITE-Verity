@@ -7,13 +7,15 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import engine, get_db
 from app.models import Document
 from app.repositories import DocumentRepository
 from app.services.rag_service import answer_question
 from app.services.redis_service import redis_service
+from app.services.vector_store import VectorStore
 from app.services.document_processing import document_processing_service
 from app.config import (
     CACHE_TTL_SECONDS,
@@ -96,6 +98,54 @@ class DocumentStatusResponse(BaseModel):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _check_database() -> bool:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        logger.exception(
+            "Database readiness check failed",
+            extra={"event": "database.readiness_failed"},
+        )
+        return False
+
+
+def _check_redis() -> bool:
+    return redis_service.health_check()
+
+
+def _check_chroma() -> bool:
+    try:
+        return VectorStore().health_check()
+    except Exception:
+        logger.exception(
+            "Chroma readiness check failed",
+            extra={"event": "chroma.readiness_failed"},
+        )
+        return False
+
+
+@app.get("/ready")
+def ready() -> JSONResponse:
+    results = {
+        "database": _check_database(),
+        "redis": _check_redis(),
+        "chroma": _check_chroma(),
+    }
+
+    status = "ok" if all(results.values()) else "degraded"
+    payload = {
+        "status": status,
+        **{name: ("ok" if healthy else "unavailable") for name, healthy in results.items()},
+    }
+
+    return JSONResponse(
+        status_code=200 if status == "ok" else 503,
+        content=payload,
+    )
 
 
 @app.post("/api/chat", response_model=ChatResponse)
