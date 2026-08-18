@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.database import engine, get_db
 from app.models import Document
-from app.repositories import DocumentRepository
+from app.repositories import ConversationRepository, DocumentRepository
 from app.services.rag_service import answer_question
 from app.services.redis_service import redis_service
 from app.services.vector_store import VectorStore
@@ -89,6 +89,7 @@ class ChatRequest(BaseModel):
 
     question: str = Field(min_length=1)
     document: str = Field(min_length=1)
+    conversation_id: int | None = None
 
 
 class ChatResponse(BaseModel):
@@ -167,8 +168,64 @@ def ready() -> JSONResponse:
     )
 
 
+def _persist_user_question(session: Session, request: ChatRequest) -> int | None:
+    """Persist the user question best-effort; returns the conversation id.
+
+    Creates/syncs the Document row, reuses or creates the Conversation for the
+    requested document, and stores the user Message. Returns None when
+    persistence failed so the chat request can still succeed."""
+    try:
+        document = DocumentRepository(session).get_or_create_by_filename(
+            request.document
+        )
+        conversation = ConversationRepository(session).get_or_create(
+            document.id,
+            request.conversation_id,
+        )
+        ConversationRepository(session).add_message(
+            conversation.id,
+            "user",
+            request.question,
+        )
+        return conversation.id
+    except Exception:
+        session.rollback()
+        logger.exception(
+            "Chat history persistence failed",
+            extra={"event": "chat.persistence_failed"},
+        )
+        return None
+
+
+def _persist_assistant_answer(
+    session: Session,
+    conversation_id: int | None,
+    answer: str,
+) -> None:
+    """Persist the assistant answer best-effort after a cache hit or a
+    successful RAG/LLM response. Never raises."""
+    if conversation_id is None:
+        return
+    try:
+        ConversationRepository(session).add_message(
+            conversation_id,
+            "assistant",
+            answer,
+        )
+    except Exception:
+        session.rollback()
+        logger.exception(
+            "Chat history persistence failed",
+            extra={"event": "chat.persistence_failed"},
+        )
+
+
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    http_request: Request,
+    session: Session = Depends(get_db),
+) -> ChatResponse:
     client_host = (
         http_request.client.host
         if http_request.client is not None
@@ -182,13 +239,18 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     ):
         raise HTTPException(status_code=429, detail="Too many chat requests.")
 
+    conversation_id = _persist_user_question(session, request)
+
     cache_key = redis_service.cache_key(request.document, request.question)
     cached_result = redis_service.get_json(cache_key)
     if cached_result is not None:
         try:
-            return ChatResponse.model_validate(cached_result)
+            response = ChatResponse.model_validate(cached_result)
         except ValidationError:
             logger.warning("Ignoring invalid cached chat response")
+        else:
+            _persist_assistant_answer(session, conversation_id, response.answer)
+            return response
 
     try:
         result = answer_question(request.question, request.document)
@@ -198,13 +260,15 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
             response.model_dump(mode="json"),
             CACHE_TTL_SECONDS,
         )
-        return response
     except Exception:
         logger.exception("Chat request failed", extra={"event": "rag.request_failed"})
         raise HTTPException(
             status_code=500,
             detail="Unable to process chat request."
         )
+
+    _persist_assistant_answer(session, conversation_id, response.answer)
+    return response
 
 
 @app.get("/api/documents", response_model=list[DocumentResponse])
