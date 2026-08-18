@@ -2,6 +2,7 @@ from pathlib import Path
 import logging
 import re
 
+from app.config import RAG_CONTEXT_MAX_CHARS
 from app.services.embedding_service import generate_embeddings
 from app.services.vector_store import VectorStore
 from app.services.llm_service import generate_answer
@@ -751,6 +752,7 @@ def retrieve_relevant_chunks(
 
 def build_context(candidates):
     parts = []
+    total_chars = 0
 
     for index, candidate in enumerate(
         candidates,
@@ -773,11 +775,26 @@ def build_context(candidates):
                 f"{metadata['sheet']}\n"
             )
 
-        parts.append(
+        passage = (
             header
             + "\n"
             + candidate["document"]
         )
+
+        separator_chars = 2 if parts else 0
+
+        # Defensive upper bound only: normal contexts are far below
+        # RAG_CONTEXT_MAX_CHARS, so this never changes existing behavior.
+        # Stop before adding a passage that would exceed the budget,
+        # never cut a passage mid-text, and always keep the first passage.
+        if (
+            parts
+            and total_chars + separator_chars + len(passage) > RAG_CONTEXT_MAX_CHARS
+        ):
+            break
+
+        parts.append(passage)
+        total_chars += separator_chars + len(passage)
 
     return "\n\n".join(parts)
 
