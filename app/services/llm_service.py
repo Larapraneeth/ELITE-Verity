@@ -1,5 +1,6 @@
 import os
 
+from app.config import GROQ_MODEL
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -21,7 +22,7 @@ def generate_answer(prompt):
     """
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[
             {
                 "role": "user",
