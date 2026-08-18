@@ -1,9 +1,11 @@
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 
 from app.database import SessionLocal
+from app.config import WORKER_POLL_INTERVAL_SECONDS
 from app.repositories import DocumentRepository
 from app.services.document_processor import process_document
 from app.services.embedding_service import generate_embeddings
@@ -48,11 +50,10 @@ class DocumentProcessingService:
         repository = DocumentRepository(session)
 
         try:
-            document = repository.get(document_id)
+            document = repository.claim_pending(document_id)
             if document is None:
                 return
 
-            repository.update_status(document_id, "processing")
             file_path = UPLOAD_DIR / Path(document.filename).name
             chunks = process_document(file_path)
             if not chunks:
@@ -71,6 +72,28 @@ class DocumentProcessingService:
             session.close()
             with self.lock:
                 self.active_jobs.discard(document_id)
+
+    def enqueue_pending(self) -> None:
+        session = self.session_factory()
+        try:
+            document_ids = [
+                document.id
+                for document in DocumentRepository(session).list_pending()
+            ]
+        finally:
+            session.close()
+
+        for document_id in document_ids:
+            self.enqueue(document_id)
+
+
+def run_worker() -> None:
+    while True:
+        try:
+            document_processing_service.enqueue_pending()
+        except Exception:
+            logger.exception("Could not poll pending document jobs")
+        time.sleep(WORKER_POLL_INTERVAL_SECONDS)
 
 
 document_processing_service = DocumentProcessingService()

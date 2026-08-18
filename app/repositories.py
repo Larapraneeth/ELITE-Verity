@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models import Document
@@ -35,3 +35,19 @@ class DocumentRepository:
         self.session.commit()
         self.session.refresh(document)
         return document
+
+    def list_pending(self) -> list[Document]:
+        statement = select(Document).where(Document.status == "pending")
+        return list(self.session.scalars(statement))
+
+    def claim_pending(self, document_id: int) -> Document | None:
+        statement = (
+            update(Document)
+            .where(Document.id == document_id, Document.status == "pending")
+            .values(status="processing")
+        )
+        result = self.session.execute(statement)
+        self.session.commit()
+        if result.rowcount != 1:
+            return None
+        return self.get(document_id)

@@ -55,7 +55,7 @@ def test_worker_marks_document_ready_after_existing_ingestion_services_run():
     session = Mock()
     document = Mock(filename="sample.pdf")
     repository = Mock()
-    repository.get.return_value = document
+    repository.claim_pending.return_value = document
     vector_store = Mock()
     service = DocumentProcessingService(session_factory=lambda: session, executor=Mock())
 
@@ -74,10 +74,8 @@ def test_worker_marks_document_ready_after_existing_ingestion_services_run():
     ):
         service.process(12)
 
-    assert repository.update_status.call_args_list == [
-        call(12, "processing"),
-        call(12, "ready"),
-    ]
+    repository.claim_pending.assert_called_once_with(12)
+    assert repository.update_status.call_args_list == [call(12, "ready")]
     vector_store.add_chunks.assert_called_once()
     session.close.assert_called_once()
 
@@ -85,7 +83,7 @@ def test_worker_marks_document_ready_after_existing_ingestion_services_run():
 def test_worker_marks_document_failed_when_processing_raises():
     session = Mock()
     repository = Mock()
-    repository.get.return_value = Mock(filename="sample.pdf")
+    repository.claim_pending.return_value = Mock(filename="sample.pdf")
     service = DocumentProcessingService(session_factory=lambda: session, executor=Mock())
 
     with patch(
@@ -97,10 +95,8 @@ def test_worker_marks_document_failed_when_processing_raises():
     ):
         service.process(12)
 
-    assert repository.update_status.call_args_list == [
-        call(12, "processing"),
-        call(12, "failed"),
-    ]
+    repository.claim_pending.assert_called_once_with(12)
+    assert repository.update_status.call_args_list == [call(12, "failed")]
 
 
 def test_processing_and_status_endpoints(client: TestClient, session: Session, monkeypatch):

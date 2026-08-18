@@ -16,6 +16,7 @@ from app.config import (
     CACHE_TTL_SECONDS,
     CHAT_RATE_LIMIT,
     CHAT_RATE_LIMIT_WINDOW_SECONDS,
+    DOCUMENT_PROCESSING_ENABLED,
 )
 
 
@@ -142,7 +143,10 @@ def queue_document_processing(
         raise HTTPException(status_code=409, detail="Document is already being processed.")
 
     document = repository.update_status(document_id, "pending")
-    if not document_processing_service.enqueue(document_id):
+    if (
+        DOCUMENT_PROCESSING_ENABLED
+        and not document_processing_service.enqueue(document_id)
+    ):
         repository.update_status(document_id, "failed")
         raise HTTPException(status_code=503, detail="Unable to queue document processing.")
     return document

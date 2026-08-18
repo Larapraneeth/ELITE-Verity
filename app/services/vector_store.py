@@ -1,15 +1,23 @@
 import chromadb
 
+from app.config import CHROMA_HOST, CHROMA_PERSIST_DIRECTORY, CHROMA_PORT
+
 
 class VectorStore:
 
     def __init__(
         self,
-        persist_directory="data/chroma"
+        persist_directory=CHROMA_PERSIST_DIRECTORY
     ):
-        self.client = chromadb.PersistentClient(
-            path=persist_directory
-        )
+        if CHROMA_HOST:
+            self.client = chromadb.HttpClient(
+                host=CHROMA_HOST,
+                port=CHROMA_PORT,
+            )
+        else:
+            self.client = chromadb.PersistentClient(
+                path=persist_directory
+            )
 
         self.collection = (
             self.client.get_or_create_collection(

@@ -8,6 +8,13 @@ def _get_positive_int(name: str, default: int) -> int:
         return default
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///data/elite_verity.db",
@@ -29,3 +36,8 @@ CHAT_RATE_LIMIT = _get_positive_int("CHAT_RATE_LIMIT", 30)
 CHAT_RATE_LIMIT_WINDOW_SECONDS = _get_positive_int(
     "CHAT_RATE_LIMIT_WINDOW_SECONDS", 60
 )
+CHROMA_HOST = os.getenv("CHROMA_HOST")
+CHROMA_PORT = _get_positive_int("CHROMA_PORT", 8000)
+CHROMA_PERSIST_DIRECTORY = os.getenv("CHROMA_PERSIST_DIRECTORY", "data/chroma")
+DOCUMENT_PROCESSING_ENABLED = _get_bool("DOCUMENT_PROCESSING_ENABLED", True)
+WORKER_POLL_INTERVAL_SECONDS = _get_positive_int("WORKER_POLL_INTERVAL_SECONDS", 2)
