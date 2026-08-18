@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -51,3 +53,22 @@ class DocumentRepository:
         if result.rowcount != 1:
             return None
         return self.get(document_id)
+
+    def recover_stale_processing(self, stale_seconds: int) -> int:
+        """Atomically reset 'processing' documents that have been stuck for
+        longer than ``stale_seconds`` back to 'pending' so the worker can pick
+        them up again. Uses ``updated_at``, which is refreshed on every status
+        change including the atomic ``claim_pending`` transition.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
+        statement = (
+            update(Document)
+            .where(
+                Document.status == "processing",
+                Document.updated_at < cutoff,
+            )
+            .values(status="pending")
+        )
+        result = self.session.execute(statement)
+        self.session.commit()
+        return result.rowcount

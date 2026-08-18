@@ -8,6 +8,20 @@ def _get_positive_int(name: str, default: int) -> int:
         return default
 
 
+def _get_non_negative_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.getenv(name, default)))
+    except ValueError:
+        return default
+
+
+def _get_non_negative_float(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, default)))
+    except ValueError:
+        return default
+
+
 def _get_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -41,4 +55,13 @@ CHROMA_PORT = _get_positive_int("CHROMA_PORT", 8000)
 CHROMA_PERSIST_DIRECTORY = os.getenv("CHROMA_PERSIST_DIRECTORY", "data/chroma")
 DOCUMENT_PROCESSING_ENABLED = _get_bool("DOCUMENT_PROCESSING_ENABLED", True)
 WORKER_POLL_INTERVAL_SECONDS = _get_positive_int("WORKER_POLL_INTERVAL_SECONDS", 2)
+DOCUMENT_PROCESSING_MAX_RETRIES = _get_non_negative_int(
+    "DOCUMENT_PROCESSING_MAX_RETRIES", 3
+)
+DOCUMENT_PROCESSING_RETRY_DELAY_SECONDS = _get_non_negative_float(
+    "DOCUMENT_PROCESSING_RETRY_DELAY_SECONDS", 1.0
+)
+DOCUMENT_PROCESSING_STALE_SECONDS = _get_positive_int(
+    "DOCUMENT_PROCESSING_STALE_SECONDS", 300
+)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
