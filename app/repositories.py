@@ -141,11 +141,13 @@ class ConversationRepository:
         conversation_id: int,
         role: str,
         content: str,
+        source: dict | None = None,
     ) -> Message:
         message = Message(
             conversation_id=conversation_id,
             role=role,
             content=content,
+            source=source,
         )
         self.session.add(message)
         self.session.commit()

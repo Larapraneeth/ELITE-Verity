@@ -8,11 +8,11 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.database import engine, get_db
-from app.models import Document
+from app.models import Conversation, Document, Message
 from app.repositories import ConversationRepository, DocumentRepository
 from app.services.rag_service import answer_question
 from app.services.redis_service import redis_service
@@ -201,6 +201,7 @@ def _persist_assistant_answer(
     session: Session,
     conversation_id: int | None,
     answer: str,
+    source: dict | None = None,
 ) -> None:
     """Persist the assistant answer best-effort after a cache hit or a
     successful RAG/LLM response. Never raises."""
@@ -211,6 +212,7 @@ def _persist_assistant_answer(
             conversation_id,
             "assistant",
             answer,
+            source,
         )
     except Exception:
         session.rollback()
@@ -249,7 +251,7 @@ def chat(
         except ValidationError:
             logger.warning("Ignoring invalid cached chat response")
         else:
-            _persist_assistant_answer(session, conversation_id, response.answer)
+            _persist_assistant_answer(session, conversation_id, response.answer, response.source)
             return response
 
     try:
@@ -267,8 +269,71 @@ def chat(
             detail="Unable to process chat request."
         )
 
-    _persist_assistant_answer(session, conversation_id, response.answer)
+    _persist_assistant_answer(session, conversation_id, response.answer, response.source)
     return response
+
+
+@app.get("/api/documents/{document_id}/conversations", response_model=list[dict])
+def list_document_conversations(
+    document_id: int, session: Session = Depends(get_db)
+):
+    """List all conversations for a document, each with message count and last message."""
+    document = DocumentRepository(session).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    statements = select(Conversation).where(Conversation.document_id == document_id)
+    conversations = list(session.scalars(statements))
+
+    result = []
+    for conv in conversations:
+        msg_count = session.scalar(
+            select(func.count(Message.id)).where(Message.conversation_id == conv.id)
+        )
+        last_msg = session.scalar(
+            select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at.desc())
+        )
+        result.append(
+            {
+                "id": conv.id,
+                "message_count": msg_count,
+                "last_message_content": last_msg.content if last_msg else None,
+                "last_message_role": last_msg.role if last_msg else None,
+                "last_message_created_at": last_msg.created_at.isoformat() if last_msg else None,
+            }
+        )
+
+    return result
+
+
+@app.get("/api/documents/{document_id}/conversations/{conversation_id}/messages", response_model=list[dict])
+def get_conversation_messages(
+    document_id: int,
+    conversation_id: int,
+    session: Session = Depends(get_db),
+):
+    """Retrieve all messages for a conversation, verifying ownership."""
+    document = DocumentRepository(session).get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    conversation = session.get(Conversation, conversation_id)
+    if conversation is None or conversation.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    statements = select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc())
+    messages = list(session.scalars(statements))
+
+    return [
+        {
+            "id": message.id,
+            "role": message.role,
+            "content": message.content,
+            "source": message.source,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+        for message in messages
+    ]
 
 
 @app.get("/api/documents", response_model=list[DocumentResponse])
